@@ -1,20 +1,22 @@
 <#
 .SYNOPSIS
   Converts Teams HTML exports to PDF using Microsoft Edge (headless),
-  shrinking oversized images first so the PDFs stay small.
+  shrinking oversized images so the PDFs stay small.
 
 .DESCRIPTION
-  Uses only what ships with Windows: PowerShell, the built-in .NET
-  System.Drawing library, and Microsoft Edge. No third-party tools.
+  Uses only what ships with Windows: PowerShell and Microsoft Edge.
+  No third-party tools, and no Admin rights needed - it works even when
+  PowerShell is locked down (Constrained Language Mode), because the
+  image shrinking is done by Edge itself while it renders the page.
 
   For each .html file in the folder:
-    1. Finds every <img> (linked files and embedded base64 images).
-    2. Any image wider than -MaxWidth pixels, or larger than 500 KB,
-       is scaled down and re-saved as a compressed JPEG.
-    3. Adds CSS so images never spill off the page.
-    4. Prints to PDF with Edge, which renders modern emoji correctly.
+    1. Adds a small script and stylesheet to a temporary copy of the page.
+    2. Edge loads it; any image wider than -MaxWidth pixels (or any
+       embedded image over 500 KB) is scaled down and re-saved as JPEG.
+    3. Text and layout are scaled by -Zoom percent.
+    4. Edge prints it to PDF, rendering modern emoji correctly.
 
-  Original HTML files are never modified; a temporary copy is used.
+  Original HTML files are never modified.
 
 .PARAMETER Folder
   Folder containing the .html files. Defaults to the current folder.
@@ -25,21 +27,21 @@
 .PARAMETER Quality
   JPEG quality, 1-100. Lower means smaller files.
 
+.PARAMETER Zoom
+  Size of everything on the page, in percent. 100 = as in the browser,
+  80 = smaller text so more fits on each page.
+
 .EXAMPLE
   .\Convert-TeamsHtmlToPdf.ps1
 .EXAMPLE
-  .\Convert-TeamsHtmlToPdf.ps1 -Folder "C:\Exports" -MaxWidth 900 -Quality 60
+  .\Convert-TeamsHtmlToPdf.ps1 -Folder "C:\Exports" -Zoom 75 -MaxWidth 900 -Quality 60
 #>
 param(
   [string]$Folder   = (Get-Location).Path,
   [int]   $MaxWidth = 1200,
-  [int]   $Quality  = 75
+  [int]   $Quality  = 75,
+  [int]   $Zoom     = 80
 )
-
-Add-Type -AssemblyName System.Drawing
-
-$script:maxWidth = $MaxWidth
-$script:sizeLimit = 500KB
 
 # Locate Edge
 $edge = @(
@@ -48,64 +50,79 @@ $edge = @(
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $edge) { throw "Microsoft Edge (msedge.exe) was not found." }
 
-$css = "<style>img{max-width:100% !important;height:auto !important}</style>"
+# Separate throwaway Edge profile, so your normal browser (sign-in, sync) is untouched
+$profileDir = Join-Path $env:TEMP "PDFPowerConvert-Edge"
+$edgeLog    = Join-Path $env:TEMP "PDFPowerConvert-Edge.log"
 
-$script:codec  = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object MimeType -eq 'image/jpeg'
-$script:params = New-Object System.Drawing.Imaging.EncoderParameters 1
-$script:params.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality), ([long]$Quality)
-
-$evaluator = [System.Text.RegularExpressions.MatchEvaluator]{
-  param($m)
-  $src = $m.Groups[3].Value
-  try {
-    if ($src -match '^data:image/[^;]+;base64,(.+)$') {
-      $bytes = [Convert]::FromBase64String($Matches[1])
+# Added to each page: zoom, keep images within the page, and shrink big images
+$inject = @'
+<style>
+  html { zoom: __ZOOM__%; }
+  img, canvas { max-width: 100% !important; height: auto !important; }
+</style>
+<script>
+(function () {
+  var MAXW = __MAXW__, Q = __Q__ / 100, LIMIT = 500 * 1024;
+  function shrink(img) {
+    var w = img.naturalWidth, h = img.naturalHeight;
+    if (!w || !h) return;
+    var bigData = img.src.indexOf('data:') === 0 && img.src.length * 0.75 > LIMIT;
+    if (w <= MAXW && !bigData) return;
+    var nw = Math.min(w, MAXW), nh = Math.round(h * nw / w);
+    var c = document.createElement('canvas');
+    c.width = nw; c.height = nh;
+    var g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, nw, nh);
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(img, 0, 0, nw, nh);
+    try {
+      img.removeAttribute('srcset');
+      img.src = c.toDataURL('image/jpeg', Q);
+    } catch (e) {
+      c.className = img.className;
+      img.parentNode.replaceChild(c, img);
     }
-    else {
-      $path = [Uri]::UnescapeDataString(($src -replace '^file:///', ''))
-      if (-not [IO.Path]::IsPathRooted($path)) { $path = Join-Path $script:dir $path }
-      if (-not (Test-Path -LiteralPath $path)) { return $m.Value }
-      $bytes = [IO.File]::ReadAllBytes($path)
-    }
-
-    $img = [System.Drawing.Image]::FromStream((New-Object IO.MemoryStream (,$bytes)))
-    if ($img.Width -le $script:maxWidth -and $bytes.Length -lt $script:sizeLimit) {
-      $img.Dispose(); return $m.Value
-    }
-
-    $w = [Math]::Min($img.Width, $script:maxWidth)
-    $h = [int]($img.Height * $w / $img.Width)
-    $bmp = New-Object System.Drawing.Bitmap $w, $h
-    $g = [System.Drawing.Graphics]::FromImage($bmp)
-    $g.Clear([System.Drawing.Color]::White)
-    $g.InterpolationMode = 'HighQualityBicubic'
-    $g.DrawImage($img, 0, 0, $w, $h)
-    $g.Dispose(); $img.Dispose()
-
-    $out = New-Object IO.MemoryStream
-    $bmp.Save($out, $script:codec, $script:params); $bmp.Dispose()
-
-    $q = $m.Groups[2].Value
-    return $m.Groups[1].Value + $q + "data:image/jpeg;base64," + [Convert]::ToBase64String($out.ToArray()) + $q
   }
-  catch { return $m.Value }
-}
+  window.addEventListener('load', function () {
+    var imgs = Array.prototype.slice.call(document.images);
+    for (var i = 0; i < imgs.length; i++) { try { shrink(imgs[i]); } catch (e) {} }
+  });
+})();
+</script>
+'@
+$inject = $inject.Replace('__ZOOM__', "$Zoom").Replace('__MAXW__', "$MaxWidth").Replace('__Q__', "$Quality")
 
-$files = Get-ChildItem -LiteralPath $Folder -Filter *.html | Where-Object Name -notlike "_tmp_*"
+$files = Get-ChildItem -LiteralPath $Folder -Filter *.html | Where-Object { $_.Name -notlike "_tmp_*" }
 if (-not $files) { Write-Host "No .html files found in $Folder"; return }
 
 foreach ($file in $files) {
-  $script:dir = $file.DirectoryName
-  $tmp = Join-Path $script:dir "_tmp_$($file.Name)"
-  $pdf = Join-Path $script:dir "$($file.BaseName).pdf"
+  $dir = $file.DirectoryName
+  $tmp = Join-Path $dir "_tmp_$($file.Name)"
+  $pdf = Join-Path $dir "$($file.BaseName).pdf"
   Write-Host "Converting $($file.Name)..."
 
   $html = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
-  $html = [regex]::Replace($html, '(<img\b[^>]*?\bsrc\s*=\s*)(["''])(.*?)\2', $evaluator)
-  $html -replace '</head>', "$css</head>" | Set-Content -LiteralPath $tmp -Encoding UTF8
+  if ($html -match '(?i)</head>') {
+    $html = $html -replace '(?i)</head>', ($inject + '</head>')
+  } else {
+    $html = $inject + $html
+  }
+  Set-Content -LiteralPath $tmp -Value $html -Encoding UTF8
+  if (Test-Path -LiteralPath $pdf) { Remove-Item -LiteralPath $pdf }
 
-  Start-Process $edge -Wait -ArgumentList "--headless","--disable-gpu","--no-pdf-header-footer","--print-to-pdf=`"$pdf`"","`"$tmp`""
+  Start-Process $edge -Wait -WindowStyle Hidden -RedirectStandardError $edgeLog -ArgumentList @(
+    "--headless", "--disable-gpu", "--no-pdf-header-footer", "--log-level=3",
+    "--allow-file-access-from-files", "--virtual-time-budget=15000",
+    "--user-data-dir=`"$profileDir`"",
+    "--print-to-pdf=`"$pdf`"", "`"$tmp`""
+  )
   Remove-Item -LiteralPath $tmp
+
+  if (Test-Path -LiteralPath $pdf) {
+    Write-Host ("  -> {0} ({1:N0} KB)" -f (Split-Path $pdf -Leaf), ((Get-Item -LiteralPath $pdf).Length / 1KB))
+  } else {
+    Write-Host "  -> FAILED (see $edgeLog)" -ForegroundColor Red
+  }
 }
 
 Write-Host "Done."
