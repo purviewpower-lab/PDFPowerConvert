@@ -92,6 +92,12 @@ $inject = @'
 '@
 $inject = $inject.Replace('__ZOOM__', "$Zoom").Replace('__MAXW__', "$MaxWidth").Replace('__Q__', "$Quality")
 
+# The additions go in a small header file that is joined onto the front of each
+# export with a plain file copy. The export itself is never loaded into
+# PowerShell's memory, so even very large (multi-GB) files work.
+$header = Join-Path $env:TEMP "PDFPowerConvert-header.html"
+Set-Content -LiteralPath $header -Encoding UTF8 -Value ("<!DOCTYPE html>`r`n<meta charset=`"utf-8`">`r`n" + $inject)
+
 $files = Get-ChildItem -LiteralPath $Folder -Filter *.html | Where-Object { $_.Name -notlike "_tmp_*" }
 if (-not $files) { Write-Host "No .html files found in $Folder"; return }
 
@@ -99,16 +105,14 @@ foreach ($file in $files) {
   $dir = $file.DirectoryName
   $tmp = Join-Path $dir "_tmp_$($file.Name)"
   $pdf = Join-Path $dir "$($file.BaseName).pdf"
-  Write-Host "Converting $($file.Name)..."
+  Write-Host ("Converting {0} ({1:N0} MB)..." -f $file.Name, ($file.Length / 1MB))
 
-  $html = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8
-  if ($html -match '(?i)</head>') {
-    $html = $html -replace '(?i)</head>', ($inject + '</head>')
-  } else {
-    $html = $inject + $html
+  foreach ($old in $pdf, $tmp) { if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old } }
+  Start-Process cmd.exe -Wait -WindowStyle Hidden -ArgumentList "/c copy /b /y `"$header`"+`"$($file.FullName)`" `"$tmp`""
+  if (-not (Test-Path -LiteralPath $tmp)) {
+    Write-Host "  -> FAILED to make temporary copy (is the disk full?)" -ForegroundColor Red
+    continue
   }
-  Set-Content -LiteralPath $tmp -Value $html -Encoding UTF8
-  if (Test-Path -LiteralPath $pdf) { Remove-Item -LiteralPath $pdf }
 
   Start-Process $edge -Wait -WindowStyle Hidden -RedirectStandardError $edgeLog -ArgumentList @(
     "--headless", "--disable-gpu", "--no-pdf-header-footer", "--log-level=3",

@@ -33,6 +33,10 @@ Options:
 
 Images narrower than `-MaxWidth` (and embedded images under 500 KB) are left alone, so avatars and icons keep their quality.
 
+## Very large exports
+
+Exports of several hundred MB work: the file is never loaded into PowerShell's memory. Expect a few minutes per file at that size (a 470 MB test export took about 2½ minutes and produced a 10 MB PDF). Make sure there's free disk space of roughly the export's size, for the temporary copy.
+
 ## If scripts are blocked
 
 If Windows says running scripts is disabled, try:
