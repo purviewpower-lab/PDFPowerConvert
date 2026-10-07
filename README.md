@@ -21,17 +21,19 @@ Each `chat.html` gets a matching `chat.pdf` alongside it.
 Options:
 
 ```powershell
-.\Convert-TeamsHtmlToPdf.ps1 -Folder "C:\Exports" -Zoom 75 -MaxWidth 900 -Quality 60
+.\Convert-TeamsHtmlToPdf.ps1 -Folder "C:\Exports" -Zoom 75 -ImageWidth 40 -ImageHeight 8
 ```
 
-| Option      | Default        | Meaning                                                   |
-|-------------|----------------|-----------------------------------------------------------|
-| `-Folder`   | current folder | Where the `.html` files are                               |
-| `-Zoom`     | `80`           | Size of text and layout, in percent (100 = browser size)  |
-| `-MaxWidth` | `1200`         | Widest an image may be, in pixels                         |
-| `-Quality`  | `75`           | JPEG quality 1–100 (lower = smaller files)                |
+| Option             | Default        | Meaning                                                              |
+|--------------------|----------------|----------------------------------------------------------------------|
+| `-Folder`          | current folder | Where the `.html` files are                                          |
+| `-Zoom`            | `80`           | Size of text and layout, in percent (100 = browser size)             |
+| `-ImageWidth`      | `50`           | **How big images look:** max width, as % of the available width      |
+| `-ImageHeight`     | `10`           | **How big images look:** max height, in cm (stops tall screenshots filling a page) |
+| `-ImageResolution` | `1200`         | **File size:** most pixels an image keeps across. Lower = smaller PDF |
+| `-Quality`         | `75`           | **File size:** JPEG quality 1–100 (lower = smaller files)             |
 
-Images narrower than `-MaxWidth` (and embedded images under 500 KB) are left alone, so avatars and icons keep their quality.
+Images keep their shape: whichever of `-ImageWidth` / `-ImageHeight` is reached first wins. Small images (avatars, icons, inline emoji) are left alone. `-MaxWidth` still works as the old name for `-ImageResolution`.
 
 ## Very large exports
 

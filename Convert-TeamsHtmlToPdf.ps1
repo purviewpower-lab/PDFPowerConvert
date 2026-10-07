@@ -11,18 +11,31 @@
 
   For each .html file in the folder:
     1. Adds a small script and stylesheet to a temporary copy of the page.
-    2. Edge loads it; any image wider than -MaxWidth pixels (or any
+    2. Edge loads it; any image wider than -ImageResolution pixels (or any
        embedded image over 500 KB) is scaled down and re-saved as JPEG.
-    3. Text and layout are scaled by -Zoom percent.
-    4. Edge prints it to PDF, rendering modern emoji correctly.
+       This controls FILE SIZE.
+    3. Images are limited to -ImageWidth / -ImageHeight on the page.
+       This controls how BIG images LOOK.
+    4. Text and layout are scaled by -Zoom percent.
+    5. Edge prints it to PDF, rendering modern emoji correctly.
 
   Original HTML files are never modified.
 
 .PARAMETER Folder
   Folder containing the .html files. Defaults to the current folder.
 
-.PARAMETER MaxWidth
-  Widest an image may be, in pixels. 1200 is roughly print quality on A4.
+.PARAMETER ImageWidth
+  Largest width an image may take up on the page, as a percentage of the
+  available width. 100 = full width, 50 = half width.
+
+.PARAMETER ImageHeight
+  Largest height an image may take up on the page, in centimetres (before
+  -Zoom is applied). Stops tall screenshots filling whole pages.
+
+.PARAMETER ImageResolution
+  Most pixels an image may keep across its width. Lower = smaller PDF but
+  blurrier images when zoomed in. Does not change how big images look.
+  (-MaxWidth is accepted as the old name for this.)
 
 .PARAMETER Quality
   JPEG quality, 1-100. Lower means smaller files.
@@ -34,11 +47,14 @@
 .EXAMPLE
   .\Convert-TeamsHtmlToPdf.ps1
 .EXAMPLE
-  .\Convert-TeamsHtmlToPdf.ps1 -Folder "C:\Exports" -Zoom 75 -MaxWidth 900 -Quality 60
+  .\Convert-TeamsHtmlToPdf.ps1 -Folder "C:\Exports" -Zoom 75 -ImageWidth 40 -ImageHeight 8
 #>
 param(
   [string]$Folder   = (Get-Location).Path,
-  [int]   $MaxWidth = 1200,
+  [int]   $ImageWidth  = 50,
+  [double]$ImageHeight = 10,
+  [Alias('MaxWidth')]
+  [int]   $ImageResolution = 1200,
   [int]   $Quality  = 75,
   [int]   $Zoom     = 80
 )
@@ -58,7 +74,12 @@ $edgeLog    = Join-Path $env:TEMP "PDFPowerConvert-Edge.log"
 $inject = @'
 <style>
   html { zoom: __ZOOM__%; }
-  img, canvas { max-width: 100% !important; height: auto !important; }
+  img, canvas {
+    max-width: __IMGW__% !important;
+    max-height: __IMGH__cm !important;
+    height: auto !important;
+    object-fit: contain;
+  }
 </style>
 <script>
 (function () {
@@ -90,7 +111,7 @@ $inject = @'
 })();
 </script>
 '@
-$inject = $inject.Replace('__ZOOM__', "$Zoom").Replace('__MAXW__', "$MaxWidth").Replace('__Q__', "$Quality")
+$inject = $inject.Replace('__ZOOM__', "$Zoom").Replace('__MAXW__', "$ImageResolution").Replace('__IMGW__', "$ImageWidth").Replace('__IMGH__', ("$ImageHeight" -replace ',', '.')).Replace('__Q__', "$Quality")
 
 # The additions go in a small header file that is joined onto the front of each
 # export with a plain file copy. The export itself is never loaded into
