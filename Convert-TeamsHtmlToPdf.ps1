@@ -109,8 +109,11 @@ foreach ($file in $files) {
 
   foreach ($old in $pdf, $tmp) { if (Test-Path -LiteralPath $old) { Remove-Item -LiteralPath $old } }
   Start-Process cmd.exe -Wait -WindowStyle Hidden -ArgumentList "/c copy /b /y `"$header`"+`"$($file.FullName)`" `"$tmp`""
-  if (-not (Test-Path -LiteralPath $tmp)) {
-    Write-Host "  -> FAILED to make temporary copy (is the disk full?)" -ForegroundColor Red
+  # Make sure the temporary copy is complete (header + every byte of the export)
+  $expected = (Get-Item -LiteralPath $header).Length + $file.Length
+  if (-not (Test-Path -LiteralPath $tmp) -or (Get-Item -LiteralPath $tmp).Length -ne $expected) {
+    Write-Host "  -> FAILED: temporary copy is incomplete (is the disk full?). Skipped - no PDF made." -ForegroundColor Red
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp }
     continue
   }
 
