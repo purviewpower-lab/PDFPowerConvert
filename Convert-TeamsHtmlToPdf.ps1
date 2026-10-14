@@ -5,6 +5,9 @@
 
 .DESCRIPTION
   Uses only what ships with Windows: PowerShell and Microsoft Edge.
+
+  Security: scripts inside the exported HTML are blocked from running, and
+  the page cannot make network connections or read other local files.
   No third-party tools, and no Admin rights needed - it works even when
   PowerShell is locked down (Constrained Language Mode), because the
   image shrinking is done by Edge itself while it renders the page.
@@ -81,7 +84,7 @@ $inject = @'
     object-fit: contain;
   }
 </style>
-<script>
+<script nonce="__NONCE__">
 (function () {
   var MAXW = __MAXW__, Q = __Q__ / 100, LIMIT = 500 * 1024;
   function shrink(img) {
@@ -117,7 +120,19 @@ $inject = $inject.Replace('__ZOOM__', "$Zoom").Replace('__MAXW__', "$ImageResolu
 # export with a plain file copy. The export itself is never loaded into
 # PowerShell's memory, so even very large (multi-GB) files work.
 $header = Join-Path $env:TEMP "PDFPowerConvert-header.html"
-Set-Content -LiteralPath $header -Encoding UTF8 -Value ("<!DOCTYPE html>`r`n<meta charset=`"utf-8`">`r`n" + $inject)
+# SECURITY: a Content Security Policy at the very top of every page.
+#  - Blocks ALL scripts in the export (inline, linked and onerror= style handlers).
+#    Only our own image-shrinking script runs, identified by a random one-off
+#    code ("nonce") generated fresh each run, so an export can't fake it.
+#  - Blocks all network access from the page (no fetching or sending data).
+#  - Still allows images, styles and fonts that are embedded or stored locally.
+$nonce = (New-Guid).Guid -replace '-', ''
+$csp = "default-src 'none'; script-src 'nonce-$nonce'; style-src 'unsafe-inline' file: data:; " +
+       "img-src data: file: blob:; font-src data: file:; media-src data: file:; base-uri 'none'; form-action 'none'"
+$inject = $inject.Replace('__NONCE__', $nonce)
+Set-Content -LiteralPath $header -Encoding UTF8 -Value (
+  "<!DOCTYPE html>`r`n<meta charset=`"utf-8`">`r`n" +
+  "<meta http-equiv=`"Content-Security-Policy`" content=`"$csp`">`r`n" + $inject)
 
 $files = Get-ChildItem -LiteralPath $Folder -Filter *.html | Where-Object { $_.Name -notlike "_tmp_*" }
 if (-not $files) { Write-Host "No .html files found in $Folder"; return }
@@ -140,7 +155,7 @@ foreach ($file in $files) {
 
   Start-Process $edge -Wait -WindowStyle Hidden -RedirectStandardError $edgeLog -ArgumentList @(
     "--headless", "--disable-gpu", "--no-pdf-header-footer", "--log-level=3",
-    "--allow-file-access-from-files", "--virtual-time-budget=15000",
+    "--virtual-time-budget=15000",
     "--user-data-dir=`"$profileDir`"",
     "--print-to-pdf=`"$pdf`"", "`"$tmp`""
   )

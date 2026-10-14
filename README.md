@@ -5,6 +5,7 @@ Converts Microsoft Teams HTML exports to PDF using only what comes with Windows 
 - **Modern emoji render correctly**: uses Microsoft Edge's built-in print-to-PDF instead of wkhtmltopdf.
 - **Keeps PDFs small**: oversized images are scaled down and compressed by Edge while it renders the page.
 - **Adjustable text size**: shrink everything so more fits per page for easier review.
+- **Safe with untrusted exports**: scripts inside the HTML are blocked; no network or local file access.
 - **Works on locked-down PCs**: runs even when PowerShell is restricted (Constrained Language Mode).
 - **Originals untouched**: works on a temporary copy of each HTML file, with a separate throwaway Edge profile.
 
@@ -38,6 +39,18 @@ Images keep their shape: whichever of `-ImageWidth` / `-ImageHeight` is reached 
 ## Very large exports
 
 Exports of several hundred MB work: the file is never loaded into PowerShell's memory. Expect a few minutes per file at that size (a 470 MB test export took about 2½ minutes and produced a 10 MB PDF). Make sure there's free disk space of roughly the export's size, for the temporary copy.
+
+## Security
+
+Exported HTML is treated as untrusted:
+
+- **Scripts in the export never run.** A Content Security Policy is added at the top of each page that blocks all scripts (inline, linked, and `onerror=`-style handlers). Only the converter's own image-shrinking script runs, identified by a random code generated fresh on every run.
+- **No network access.** The page can't fetch or send anything.
+- **No access to other local files.** Edge's normal file:// protections stay on.
+- **Isolated browser profile.** Edge runs with a separate, empty profile, so your sign-ins and cookies aren't available to the page.
+- **No Admin needed.** Run it as a normal user.
+
+If an export relied on its own scripts to display content, that content would be missing from the PDF. Teams/Purview exports are plain HTML and don't need scripts.
 
 ## If scripts are blocked
 
